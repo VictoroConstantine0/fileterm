@@ -1,6 +1,16 @@
 import './file-tables.css'
 import '../workspace/workspace-list-rows.css'
-import { useCallback, useState, useEffect, FormEvent, MouseEvent, PointerEvent, ReactNode, RefObject } from 'react'
+import {
+  useCallback,
+  useState,
+  useEffect,
+  useRef,
+  FormEvent,
+  MouseEvent,
+  PointerEvent,
+  ReactNode,
+  RefObject
+} from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LocalFileItem, RemoteFileItem } from '@fileterm/core'
 import { formatMessage, t } from '../../i18n'
@@ -15,6 +25,10 @@ import type { FileFilterConfig } from './file-filter'
 // while a trackpad momentum gesture is in progress.
 const FILE_TABLE_ROW_HEIGHT = 24
 const FILE_TABLE_OVERSCAN = 8
+
+// Double-click detection threshold
+const DOUBLE_CLICK_INTERVAL_MS = 500
+const DOUBLE_CLICK_MOVE_THRESHOLD_PX = 4
 
 export type RemoteFileSortField = 'name' | 'size' | 'type' | 'modified' | 'permission' | 'ownerGroup'
 
@@ -195,6 +209,7 @@ export function FileTable({
   ]
 
   const [widths, setWidths] = useState<number[]>([260, 100, 100, 150, 100, 100])
+  const lastClickRef = useRef<{ rowKey: string; time: number; x: number; y: number } | null>(null)
 
   useEffect(() => {
     if (resetColumnsTrigger !== undefined && resetColumnsTrigger > 0) {
@@ -345,11 +360,33 @@ export function FileTable({
                   className={`${row.type === 'folder' ? 'is-folder' : 'is-file'} ${selectedPaths?.includes(row.path) ? 'is-selected' : ''} ${cutPaths?.includes(row.path) ? 'is-cut-pending' : ''}`}
                   onClick={(event) => onSelectItem?.(event, row)}
                   onContextMenu={(event) => onContextItem?.(event, row)}
-                  onDoubleClick={() => onOpenItem?.(row)}
                   onMouseDown={(event) => {
-                    if (event.button === 0) {
-                      onSelectionDragStart?.(event, row)
+                    if (event.button !== 0) return
+
+                    // Double-click detection: match clicks by row key, time, and position
+                    const now = Date.now()
+                    const last = lastClickRef.current
+                    if (
+                      last &&
+                      last.rowKey === String(rowKey) &&
+                      now - last.time <= DOUBLE_CLICK_INTERVAL_MS &&
+                      Math.abs(event.clientX - last.x) <= DOUBLE_CLICK_MOVE_THRESHOLD_PX &&
+                      Math.abs(event.clientY - last.y) <= DOUBLE_CLICK_MOVE_THRESHOLD_PX
+                    ) {
+                      // Second click: open item and reset
+                      lastClickRef.current = null
+                      onOpenItem?.(row)
+                    } else {
+                      // First click: record
+                      lastClickRef.current = {
+                        rowKey: String(rowKey),
+                        time: now,
+                        x: event.clientX,
+                        y: event.clientY
+                      }
                     }
+
+                    onSelectionDragStart?.(event, row)
                   }}
                   onMouseEnter={() => onSelectionDragEnter?.(row)}
                 >
@@ -410,6 +447,8 @@ export function LocalFileTable({
   onSelectionDragEnter(item: LocalFileItem): void
   onSelectionDragStart(event: MouseEvent<HTMLTableRowElement>, item: LocalFileItem): void
 }) {
+  const lastClickRef = useRef<{ rowKey: string; time: number; x: number; y: number } | null>(null)
+
   const getItemKey = useCallback(
     (index: number) => {
       const row = rows[index]
@@ -471,11 +510,33 @@ export function LocalFileTable({
               className={`${row.type === 'folder' ? 'is-folder' : 'is-file'} ${selectedPaths.includes(row.path) ? 'is-selected' : ''} ${cutPaths?.includes(row.path) ? 'is-cut-pending' : ''}`}
               onClick={(event) => onSelectItem(event, row)}
               onContextMenu={(event) => onContextItem(event, row)}
-              onDoubleClick={() => onOpenItem(row)}
               onMouseDown={(event) => {
-                if (event.button === 0) {
-                  onSelectionDragStart(event, row)
+                if (event.button !== 0) return
+
+                // Double-click detection: match clicks by row key, time, and position
+                const now = Date.now()
+                const last = lastClickRef.current
+                if (
+                  last &&
+                  last.rowKey === String(rowKey) &&
+                  now - last.time <= DOUBLE_CLICK_INTERVAL_MS &&
+                  Math.abs(event.clientX - last.x) <= DOUBLE_CLICK_MOVE_THRESHOLD_PX &&
+                  Math.abs(event.clientY - last.y) <= DOUBLE_CLICK_MOVE_THRESHOLD_PX
+                ) {
+                  // Second click: open item and reset
+                  lastClickRef.current = null
+                  onOpenItem(row)
+                } else {
+                  // First click: record
+                  lastClickRef.current = {
+                    rowKey: String(rowKey),
+                    time: now,
+                    x: event.clientX,
+                    y: event.clientY
+                  }
                 }
+
+                onSelectionDragStart(event, row)
               }}
               onMouseEnter={() => onSelectionDragEnter(row)}
             >
