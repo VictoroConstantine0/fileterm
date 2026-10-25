@@ -246,7 +246,9 @@ export function FileTable({
   const getItemKey = useCallback(
     (index: number) => {
       const row = rows[index]
-      return row ? `${row.path}:${row.name}` : index
+      if (!row) return index
+      // Use fixed key for parent directory to prevent DOM rebuild on navigation
+      return row.name === '..' ? '..' : `${row.path}:${row.name}`
     },
     [rows]
   )
@@ -334,10 +336,11 @@ export function FileTable({
               const row = rows[virtualRow.index]
               const typeLabel = getDisplayFileTypeLabel(row)
               const iconName = getDisplayFileIconName(row)
+              const rowKey = getItemKey(virtualRow.index)
 
               return (
                 <tr
-                  key={row.path}
+                  key={rowKey}
                   data-index={virtualRow.index}
                   className={`${row.type === 'folder' ? 'is-folder' : 'is-file'} ${selectedPaths?.includes(row.path) ? 'is-selected' : ''} ${cutPaths?.includes(row.path) ? 'is-cut-pending' : ''}`}
                   onClick={(event) => onSelectItem?.(event, row)}
@@ -410,7 +413,9 @@ export function LocalFileTable({
   const getItemKey = useCallback(
     (index: number) => {
       const row = rows[index]
-      return row ? `${row.path}:${row.name}` : index
+      if (!row) return index
+      // Use fixed key for parent directory to prevent DOM rebuild on navigation
+      return row.name === '..' ? '..' : `${row.path}:${row.name}`
     },
     [rows]
   )
@@ -457,10 +462,11 @@ export function LocalFileTable({
         {virtualItems.map((virtualRow) => {
           const row = rows[virtualRow.index]
           const iconName = getDisplayFileIconName(row)
+          const rowKey = getItemKey(virtualRow.index)
 
           return (
             <tr
-              key={`${row.path}:${row.name}`}
+              key={rowKey}
               data-index={virtualRow.index}
               className={`${row.type === 'folder' ? 'is-folder' : 'is-file'} ${selectedPaths.includes(row.path) ? 'is-selected' : ''} ${cutPaths?.includes(row.path) ? 'is-cut-pending' : ''}`}
               onClick={(event) => onSelectItem(event, row)}

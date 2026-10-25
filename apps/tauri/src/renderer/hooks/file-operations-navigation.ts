@@ -51,6 +51,7 @@ export function createFileOperationsNavigation(context: FileOperationsRuntime) {
     setLocalNetworkShareSource,
     setLocalNetworkCredentialsDialog,
     setLocalNetworkCredentialsDialogError,
+    remoteDirectoryLoadingTabId,
     setRemoteDirectoryLoadingTabId,
     reportStatusError,
     ensureActiveRemoteSessionConnected
@@ -220,6 +221,11 @@ export function createFileOperationsNavigation(context: FileOperationsRuntime) {
       return
     }
 
+    // Skip if already loading a directory in this tab
+    if (remoteDirectoryLoadingTabId === activeTab.id) {
+      return
+    }
+
     void (async () => {
       try {
         setRemoteDirectoryLoadingTabId(activeTab.id)
@@ -234,6 +240,11 @@ export function createFileOperationsNavigation(context: FileOperationsRuntime) {
 
   const handleOpenRemotePath = (targetPath: string) => {
     if (!activeTab || !ensureActiveRemoteSessionConnected()) {
+      return
+    }
+
+    // Skip if already loading a directory in this tab
+    if (remoteDirectoryLoadingTabId === activeTab.id) {
       return
     }
 
