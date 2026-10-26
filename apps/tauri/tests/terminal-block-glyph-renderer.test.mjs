@@ -11,11 +11,14 @@ const COLS = 80
  * Drive the real adapter with xterm-like rows. DOM reads per row are counted so
  * the O(rows) text scan and per-row layout forced by the old filter regress.
  */
-function render(codesByRow, dimensions, frames = []) {
+function render(codesByRow, dimensions, frames = [], options = {}) {
   const reads = { textContent: 0, querySelector: 0, rowBounds: 0, containerBounds: 0, screenBounds: 0 }
   const browserWindow = { devicePixelRatio: 1 }
   let rowHeight = 17
   let onRender
+  const pendingFrames = []
+  const observers = []
+  let passes = 0
 
   const doc = {
     createTreeWalker: () => ({ nextNode: () => null }),
@@ -26,7 +29,26 @@ function render(codesByRow, dimensions, frames = []) {
         color: '#fff',
         getPropertyValue: () => '',
         getPropertyPriority: () => ''
-      })
+      }),
+      document: { visibilityState: 'visible' },
+      requestAnimationFrame: (callback) => {
+        pendingFrames.push(callback)
+        return pendingFrames.length
+      },
+      cancelAnimationFrame: (handle) => {
+        pendingFrames[handle - 1] = () => {}
+      },
+      MutationObserver: class {
+        constructor(callback) {
+          this.callback = callback
+          observers.push(this)
+        }
+        observe() {}
+        disconnect() {}
+        takeRecords() {
+          return []
+        }
+      }
     }
   }
 
@@ -64,11 +86,14 @@ function render(codesByRow, dimensions, frames = []) {
   }
   const rowsElement = {
     children: rows,
+    ownerDocument: doc,
     getBoundingClientRect: () => {
       reads.containerBounds++
       return { top: 0, bottom: 17 * ROWS, width: 800, height: 17 * ROWS }
     }
   }
+  doc.defaultView.HTMLElement = Element
+  for (const row of rows) row.parentElement = rowsElement
   const terminal = {
     cols: COLS,
     rows: ROWS,
@@ -134,7 +159,15 @@ function render(codesByRow, dimensions, frames = []) {
       NodeFilter: { SHOW_TEXT: 4 },
       HTMLElement: Element,
       require: (id) => {
-        if (id === '../lib/renderer-work-log') return { trackRendererWork: (_phase, work) => work }
+        if (id === '../lib/renderer-work-log')
+          return {
+            trackRendererWork:
+              (_phase, work) =>
+              (...args) => {
+                passes++
+                return work(...args)
+              }
+          }
         if (id === './terminal-graphic-glyphs')
           return {
             drawTerminalGraphicGlyph() {},
@@ -151,7 +184,17 @@ function render(codesByRow, dimensions, frames = []) {
     if (frame.pixelRatio !== undefined) browserWindow.devicePixelRatio = frame.pixelRatio
     onRender({ start: 0, end: ROWS - 1 })
   }
-  registration.dispose()
+  reads.passes = () => passes
+  reads.onRenderPass = () => onRender({ start: 0, end: ROWS - 1 })
+  reads.triggerMutation = (indexes) => {
+    const observer = observers[0]
+    if (observer) observer.callback(indexes.map((index) => ({ target: rows[index] })))
+  }
+  reads.flushFrames = () => {
+    while (pendingFrames.length) pendingFrames.shift()(0)
+  }
+  if (options.keepAlive) reads.dispose = () => registration.dispose()
+  else registration.dispose()
   return reads
 }
 
@@ -208,4 +251,31 @@ test('invalid calibrated metrics fall back to one container measurement', () => 
   })
   assert.equal(reads.containerBounds, 1)
   assert.equal(reads.rowBounds, 0)
+})
+
+const calibrated = () => ({ cell: { width: 10, height: 17 }, canvas: { width: 800, height: 68 } })
+
+test('selection repaints coalesce into a single block pass per frame', () => {
+  const graphicRow = [...asciiRow]
+  graphicRow[0] = 0x2500
+  const reads = render([asciiRow, graphicRow, asciiRow, asciiRow], calibrated(), [], { keepAlive: true })
+  const base = reads.passes()
+  reads.triggerMutation([1])
+  reads.triggerMutation([1])
+  reads.triggerMutation([0, 3])
+  reads.flushFrames()
+  assert.equal(reads.passes() - base, 1, 'three mutation batches schedule one pass')
+  reads.dispose()
+})
+
+test('observer rows already covered by an onRender pass are not repeated', () => {
+  const graphicRow = [...asciiRow]
+  graphicRow[0] = 0x2500
+  const reads = render([asciiRow, graphicRow, asciiRow, asciiRow], calibrated(), [], { keepAlive: true })
+  const base = reads.passes()
+  reads.triggerMutation([1])
+  reads.onRenderPass()
+  reads.flushFrames()
+  assert.equal(reads.passes() - base, 1, 'the onRender pass covers the queued row')
+  reads.dispose()
 })

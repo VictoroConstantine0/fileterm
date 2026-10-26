@@ -9,7 +9,14 @@ const BLOCK_GLYPH_TEXT_CLASS = 'xterm-block-glyph-text'
 
 type GlyphColor = { css: string; rgba: number }
 type GlyphPalette = { foreground: GlyphColor; background: GlyphColor; ansi: GlyphColor[] }
-type ThemeServiceView = { _core?: { _themeService?: { colors?: GlyphPalette } } }
+type ThemeServiceView = {
+  _core?: {
+    _themeService?: {
+      colors?: GlyphPalette
+      onChangeColors?: (listener: () => void) => { dispose(): void }
+    }
+  }
+}
 type TerminalDimensions = {
   _core?: {
     _renderService?: {
@@ -17,7 +24,7 @@ type TerminalDimensions = {
     }
   }
 }
-type SourceBackground = { resolved: string; inline: string; priority: string }
+type SourceStyle = { generation: number; color: string; background: string; inline: string; priority: string }
 type BufferGlyph = { codepoint: number; column: number; color: string }
 
 function isPositiveFinite(value: number | undefined): value is number {
@@ -72,13 +79,13 @@ function collectGraphicGlyphs(
   return glyphs
 }
 
-function restoreSourceBackground(source: HTMLElement, backgrounds: WeakMap<HTMLElement, SourceBackground>) {
-  const background = backgrounds.get(source)
-  if (!background) return
-  if (background.inline) source.style.setProperty('background-color', background.inline, background.priority)
+function restoreSourceBackground(source: HTMLElement, styles: WeakMap<HTMLElement, SourceStyle>) {
+  const style = styles.get(source)
+  if (!style) return
+  if (style.inline) source.style.setProperty('background-color', style.inline, style.priority)
   else source.style.removeProperty('background-color')
   source.classList.remove(BLOCK_GLYPH_SOURCE_CLASS)
-  backgrounds.delete(source)
+  styles.delete(source)
 }
 
 function replaceBlockGlyphs(
@@ -89,7 +96,8 @@ function replaceBlockGlyphs(
   cellWidth: number,
   pixelRatio: number,
   bufferGlyphs: BufferGlyph[],
-  sourceBackgrounds: WeakMap<HTMLElement, SourceBackground>,
+  sourceStyles: WeakMap<HTMLElement, SourceStyle>,
+  styleGeneration: number,
   screenWidth: number,
   rowTopOffset: number,
   rowHeight: number,
@@ -109,28 +117,45 @@ function replaceBlockGlyphs(
   }
 
   const domGlyphs: Array<{ codepoint: number; color: string; background: string; decorated: boolean }> = []
+  // A wrapped row keeps its placeholder spans and transparent sources until
+  // xterm replaces the row's children. Re-wrapping it again only invalidates
+  // style and layout, which is what made selection repaints expensive.
+  let needsWrap = false
+  let stylesRefreshed = false
   for (const textNode of textNodes) {
     const text = textNode.data
     const placeholder = textNode.parentElement?.classList.contains(BLOCK_GLYPH_PLACEHOLDER_CLASS)
       ? textNode.parentElement
       : null
+    if (!placeholder || placeholder.style.color !== 'transparent') needsWrap = true
     const colorElement = placeholder?.parentElement ?? textNode.parentElement
     const source = colorElement ?? row
-    const style = document.defaultView!.getComputedStyle(source)
-    if (!sourceBackgrounds.has(source)) {
-      sourceBackgrounds.set(source, {
-        resolved: style.backgroundColor,
-        inline: source.style.getPropertyValue('background-color'),
-        priority: source.style.getPropertyPriority('background-color')
+    if (!source.classList.contains('xterm-cursor') && !source.classList.contains(BLOCK_GLYPH_SOURCE_CLASS)) {
+      needsWrap = true
+    }
+    const cached = sourceStyles.get(source)
+    if (!cached || cached.generation !== styleGeneration) {
+      stylesRefreshed = true
+      const computed = document.defaultView!.getComputedStyle(source)
+      sourceStyles.set(source, {
+        generation: styleGeneration,
+        color: computed.color,
+        // While our wrapper is active the inline background is transparent;
+        // keep the value resolved before we painted the source.
+        background:
+          cached && source.classList.contains(BLOCK_GLYPH_SOURCE_CLASS) ? cached.background : computed.backgroundColor,
+        inline: cached?.inline ?? source.style.getPropertyValue('background-color'),
+        priority: cached?.priority ?? source.style.getPropertyPriority('background-color')
       })
     }
-    const background = sourceBackgrounds.get(source)!.resolved
+    const snapshot = sourceStyles.get(source)!
+    const background = snapshot.background
     for (const character of text) {
       const codepoint = character.codePointAt(0)!
       if (isGraphicGlyph(codepoint)) {
         domGlyphs.push({
           codepoint,
-          color: style.color,
+          color: snapshot.color,
           background,
           decorated: source.classList.contains('xterm-decoration-top')
         })
@@ -144,7 +169,7 @@ function replaceBlockGlyphs(
   if (!glyphsMatchBuffer) {
     existingCanvas?.remove()
     row.querySelectorAll<HTMLElement>(`.${BLOCK_GLYPH_SOURCE_CLASS}`).forEach((source) => {
-      restoreSourceBackground(source, sourceBackgrounds)
+      restoreSourceBackground(source, sourceStyles)
     })
     row.querySelectorAll<HTMLElement>(`.${BLOCK_GLYPH_TEXT_CLASS}`).forEach((text) => {
       text.replaceWith(document.createTextNode(text.textContent ?? ''))
@@ -174,6 +199,17 @@ function replaceBlockGlyphs(
   const pixelBottom = Math.round((rowTopOffset + rowHeight) * pixelRatio)
   const pixelWidth = Math.round(screenWidth * pixelRatio)
   const pixelHeight = pixelBottom - pixelTop
+  if (
+    existingCanvas &&
+    existingCanvas.width === pixelWidth &&
+    existingCanvas.height === pixelHeight &&
+    !needsWrap &&
+    !stylesRefreshed
+  ) {
+    // The row already hides its text under an up-to-date canvas. Touching it
+    // again would only invalidate style and layout during selection repaints.
+    return
+  }
   const canvas = existingCanvas ?? document.createElement('canvas')
   canvas.className = `${BLOCK_GLYPH_CLASS} xterm-block-glyph-row`
   canvas.dataset.rowIndex = String(rowIndex)
@@ -225,7 +261,7 @@ function replaceBlockGlyphs(
         : null
       const source = placeholder?.parentElement ?? textNode.parentElement
       if (!source) continue
-      const background = sourceBackgrounds.get(source)!.resolved
+      const background = sourceStyles.get(source)!.background
       // Span backgrounds use font line boxes rather than snapped terminal cells.
       // Move graphical backgrounds into the same bitmap as their foreground so
       // fractional UI positions cannot expose a black border above the sprite.
@@ -266,9 +302,15 @@ function replaceBlockGlyphs(
  * keeps ANSI style-span boundaries and glyph bearings from shifting block art.
  */
 export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
-  const sourceBackgrounds = new WeakMap<HTMLElement, SourceBackground>()
+  const sourceStyles = new WeakMap<HTMLElement, SourceStyle>()
+  // Bumped on theme changes so cached computed colors are re-read once.
+  let styleGeneration = 0
   const reusableCell = terminal.buffer.active.getNullCell()
   let rowGeometry: { cellHeight: number; pixelRatio: number; height: number } | undefined
+  // Increments once per pass so a coalesced observer flush can skip rows that an
+  // onRender-driven pass already processed after the mutation was recorded.
+  let passCount = 0
+  let lastPass: { first: number; last: number; id: number } | undefined
   const renderRows = trackRendererWork('block-layout', (start: number, end: number) => {
     // xterm rewrites rows just before onRender, so this pass already covers them.
     // Drop those records up front: ranges without graphic rows return early
@@ -293,6 +335,7 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
     })
     const first = Math.max(0, start)
     const last = Math.min(end, rows.length - 1)
+    lastPass = { first, last, id: ++passCount }
     const buffer = terminal.buffer.active
     const drawBoldTextInBrightColors = terminal.options.drawBoldTextInBrightColors ?? true
     const affected: Array<{ index: number; row: HTMLElement; bufferGlyphs: BufferGlyph[] }> = []
@@ -367,7 +410,8 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
         cellWidth,
         pixelRatio,
         bufferGlyphs,
-        sourceBackgrounds,
+        sourceStyles,
+        styleGeneration,
         screenWidth,
         rowTopBase + index * rowHeight,
         rowHeight,
@@ -383,12 +427,49 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
 
   const renderAllRows = () => renderRows(0, terminal.rows - 1)
   // xterm replaces a row's direct children when the selection or cursor state
-  // changes. Without re-wrapping them the canvas keeps painting while the fresh
-  // text is visible again, which reads as a heavier glyph until the next scroll.
+  // changes, and a held selection rebuilds every row on each mouse move. Without
+  // re-wrapping them the canvas keeps painting while the fresh text is visible
+  // again, which reads as a heavier glyph until the next scroll. Coalesce those
+  // records into one pass per animation frame: running the full block layout
+  // synchronously per mutation made selection repaints saturate the renderer.
   // The symbol adapter observes the same rows and registers first, so its rewrite
   // lands before this pass and the placeholders win.
   const rowsElement = terminal.element?.querySelector<HTMLElement>('.xterm-rows')
   const view = rowsElement?.ownerDocument?.defaultView
+  // Theme updates mutate the same palette object, so watch its change event
+  // instead of comparing colors; re-resolve cached styles once per change.
+  const themeSubscription = (terminal as unknown as ThemeServiceView)._core?._themeService?.onChangeColors?.(() => {
+    styleGeneration++
+  })
+  let pendingRows: number[] = []
+  let pendingFrame: number | undefined
+  let pendingSincePass = 0
+  const flushObserverRows = () => {
+    pendingFrame = undefined
+    const indexes = pendingRows
+    pendingRows = []
+    if (!indexes.length) return
+    const first = Math.min(...indexes)
+    const last = Math.max(...indexes)
+    if (lastPass && lastPass.id > pendingSincePass && first >= lastPass.first && last <= lastPass.last) {
+      return
+    }
+    renderRows(first, last)
+  }
+  const scheduleObserverRows = (indexes: number[]) => {
+    if (!indexes.length) return
+    if (!pendingRows.length) pendingSincePass = passCount
+    pendingRows.push(...indexes)
+    if (pendingFrame !== undefined) return
+    // A hidden window may never receive animation frames, and it needs no smooth
+    // repaint; settle those rows immediately instead of leaving text visible
+    // under the canvas until the window returns.
+    if (view && typeof view.requestAnimationFrame === 'function' && view.document?.visibilityState !== 'hidden') {
+      pendingFrame = view.requestAnimationFrame(flushObserverRows)
+      return
+    }
+    flushObserverRows()
+  }
   const observer =
     rowsElement && view && typeof view.MutationObserver === 'function'
       ? new view.MutationObserver((records) => {
@@ -400,7 +481,7 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
           }
           const children = Array.from(rowsElement.children)
           const indexes = [...changed].map((row) => children.indexOf(row)).filter((index) => index >= 0)
-          if (indexes.length) renderRows(Math.min(...indexes), Math.max(...indexes))
+          if (indexes.length) scheduleObserverRows(indexes)
         })
       : null
   if (observer && rowsElement) observer.observe(rowsElement, { childList: true, subtree: true })
@@ -410,6 +491,10 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
   return {
     dispose() {
       disposable.dispose()
+      themeSubscription?.dispose()
+      if (pendingFrame !== undefined) view?.cancelAnimationFrame?.(pendingFrame)
+      pendingFrame = undefined
+      pendingRows = []
       observer?.disconnect()
       terminal.element?.querySelectorAll(`.${BLOCK_GLYPH_CLASS}`).forEach((glyph) => glyph.remove())
       terminal.element?.querySelectorAll(`.${BLOCK_GLYPH_PLACEHOLDER_CLASS}`).forEach((glyph) => {
@@ -419,7 +504,7 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
         text.replaceWith(text.ownerDocument.createTextNode(text.textContent ?? ''))
       })
       terminal.element?.querySelectorAll<HTMLElement>(`.${BLOCK_GLYPH_SOURCE_CLASS}`).forEach((source) => {
-        restoreSourceBackground(source, sourceBackgrounds)
+        restoreSourceBackground(source, sourceStyles)
       })
     }
   }
