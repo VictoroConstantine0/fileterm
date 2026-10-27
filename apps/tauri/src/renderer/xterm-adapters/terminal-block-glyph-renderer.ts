@@ -338,7 +338,6 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
     })
     const first = Math.max(0, start)
     const last = Math.min(end, rows.length - 1)
-    lastPass = { first, last, id: ++passCount }
     const buffer = terminal.buffer.active
     const drawBoldTextInBrightColors = terminal.options.drawBoldTextInBrightColors ?? true
     const affected: Array<{ index: number; row: HTMLElement; bufferGlyphs: BufferGlyph[] }> = []
@@ -398,6 +397,10 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
     if (cellWidth <= 0 || cellHeight <= 0 || screenWidth <= 0) {
       return
     }
+    // Only a pass that reached row processing may mark these rows as covered:
+    // a failed geometry read returns above and must leave the queued rows to
+    // the observer flush.
+    lastPass = { first, last, id: ++passCount }
     // Use one nominal thickness across rows; fractional DPI can give adjacent
     // snapped rows different bitmap heights at a rounding threshold.
     // A fractional display scale must not shrink light rules below one CSS
@@ -464,7 +467,10 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
   }
   const scheduleObserverRows = (indexes: number[]) => {
     if (!indexes.length) return
-    if (!pendingRows.length) pendingSincePass = passCount
+    // Every batch carries mutations newer than any pass that ran before it, so
+    // refresh the baseline for the whole queue. Keeping the first batch's pass
+    // could skip rows that were mutated again after that pass.
+    pendingSincePass = passCount
     pendingRows.push(...indexes)
     if (pendingFrame !== undefined) return
     // A hidden window may never receive animation frames, and it needs no smooth

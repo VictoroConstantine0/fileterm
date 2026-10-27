@@ -190,6 +190,9 @@ function render(codesByRow, dimensions, frames = [], options = {}) {
   }
   reads.passes = () => passes
   reads.counters = () => ({ ...counterCounts })
+  reads.setRowHeight = (value) => {
+    rowHeight = value
+  }
   reads.onRenderPass = () => onRender({ start: 0, end: ROWS - 1 })
   reads.triggerMutation = (indexes) => {
     const observer = observers[0]
@@ -291,5 +294,36 @@ test('observer rows already covered by an onRender pass are not repeated', () =>
   assert.equal(counters['block-observer.batches'], 1)
   assert.equal(counters['block-observer.skips'], 1)
   assert.equal(counters['block-observer.flushes'], undefined)
+  reads.dispose()
+})
+
+test('a pass that cannot measure geometry does not mark rows as covered', () => {
+  const graphicRow = [...asciiRow]
+  graphicRow[0] = 0x2500
+  const dimensions = calibrated()
+  const reads = render([asciiRow, graphicRow, asciiRow, asciiRow], dimensions, [], { keepAlive: true })
+  const base = reads.passes()
+  reads.triggerMutation([1])
+  // Force a row-height remeasure that fails, as in a collapsed or hidden pane.
+  dimensions.cell.height = 18
+  reads.setRowHeight(0)
+  reads.onRenderPass()
+  reads.flushFrames()
+  assert.equal(reads.passes() - base, 2, 'the failed pass must not cover the queued row')
+  assert.equal(reads.counters()['block-observer.skips'], undefined)
+  reads.dispose()
+})
+
+test('a batch queued after an onRender pass is not skipped', () => {
+  const graphicRow = [...asciiRow]
+  graphicRow[0] = 0x2500
+  const reads = render([asciiRow, graphicRow, asciiRow, asciiRow], calibrated(), [], { keepAlive: true })
+  const base = reads.passes()
+  reads.triggerMutation([1])
+  reads.onRenderPass()
+  reads.triggerMutation([1])
+  reads.flushFrames()
+  assert.equal(reads.passes() - base, 2, 'the newer mutation needs its own pass')
+  assert.equal(reads.counters()['block-observer.skips'], undefined)
   reads.dispose()
 })
