@@ -1,4 +1,4 @@
-import { trackRendererWork } from '../lib/renderer-work-log'
+import { countRendererWork, trackRendererWork } from '../lib/renderer-work-log'
 import type { IBufferCell, IBufferLine, Terminal } from '@xterm/xterm'
 import { drawTerminalGraphicGlyph, isGraphicGlyph } from './terminal-graphic-glyphs'
 
@@ -136,6 +136,7 @@ function replaceBlockGlyphs(
     const cached = sourceStyles.get(source)
     if (!cached || cached.generation !== styleGeneration) {
       stylesRefreshed = true
+      countRendererWork('block-layout.styleReads')
       const computed = document.defaultView!.getComputedStyle(source)
       sourceStyles.set(source, {
         generation: styleGeneration,
@@ -208,6 +209,7 @@ function replaceBlockGlyphs(
   ) {
     // The row already hides its text under an up-to-date canvas. Touching it
     // again would only invalidate style and layout during selection repaints.
+    countRendererWork('block-layout.unchanged')
     return
   }
   const canvas = existingCanvas ?? document.createElement('canvas')
@@ -221,6 +223,7 @@ function replaceBlockGlyphs(
   if (!context) {
     return
   }
+  countRendererWork('block-layout.canvasDraws')
 
   context.imageSmoothingEnabled = false
   context.clearRect(0, 0, pixelWidth, pixelHeight)
@@ -355,6 +358,7 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
       affected.push({ index, row, bufferGlyphs })
     }
     if (!affected.length) return
+    countRendererWork('block-layout.rows', affected.length)
 
     // Cache the browser's quantized row height so fractional layout rounding
     // cannot accumulate down the screen; unchanged grids need no layout read.
@@ -452,8 +456,10 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
     const first = Math.min(...indexes)
     const last = Math.max(...indexes)
     if (lastPass && lastPass.id > pendingSincePass && first >= lastPass.first && last <= lastPass.last) {
+      countRendererWork('block-observer.skips')
       return
     }
+    countRendererWork('block-observer.flushes')
     renderRows(first, last)
   }
   const scheduleObserverRows = (indexes: number[]) => {
@@ -473,6 +479,7 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
   const observer =
     rowsElement && view && typeof view.MutationObserver === 'function'
       ? new view.MutationObserver((records) => {
+          countRendererWork('block-observer.batches')
           const changed = new Set<HTMLElement>()
           for (const record of records) {
             if (record.target instanceof view.HTMLElement && record.target.parentElement === rowsElement) {
@@ -481,7 +488,10 @@ export function registerTerminalBlockGlyphRenderer(terminal: Terminal) {
           }
           const children = Array.from(rowsElement.children)
           const indexes = [...changed].map((row) => children.indexOf(row)).filter((index) => index >= 0)
-          if (indexes.length) scheduleObserverRows(indexes)
+          if (indexes.length) {
+            countRendererWork('block-observer.rows', indexes.length)
+            scheduleObserverRows(indexes)
+          }
         })
       : null
   if (observer && rowsElement) observer.observe(rowsElement, { childList: true, subtree: true })

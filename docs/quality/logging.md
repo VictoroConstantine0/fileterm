@@ -115,6 +115,21 @@ app.log 在下一条日志导致超过 2 MiB 前轮转为 app.log.1，仅保留�
 
 `event-loop-gap` 另带 `expectedIntervalMs=1000`、`delayedByMs`、`lastHeartbeatAtUnixMs`、`expectedNextHeartbeatAtUnixMs` 和 `resumedAtUnixMs`，用于标定恢复后发现的心跳缺口；预期时间是近似下界，不是已知阻塞起点。以上只留有限数量的数字/固定阶段名称，不逐字符或逐批写日志；终端关闭时注销诊断引用。仍不采集完整 CPU profile、GC 事件或原生堆快照，无法据此独立证明泄漏、唯一阻塞函数或全部内存归属。
 
+#### schemaVersion 4：块字形观察器的内部计数
+
+2026-10-27 的块字形观察器合并优化把内部行为计入 `work.schemaVersion=4` 的 `work.counters`。计数与 `phases` 同一健康窗口重置，只含数字，不含终端正文、行号或路径。它回答“为什么不跑、合并生效没有”，不能换算成耗时：计数为窗口内累计值，阶段耗时另见 `phases`。
+
+- `block-observer.batches`：MutationObserver 回调批次数，仅统计行级 `childList` 变化。
+- `block-observer.rows`：排队等待重排的行索引数，同一行可能被多次计入。
+- `block-observer.flushes`：实际执行的合并 pass 次数（每帧至多一次）。
+- `block-observer.skips`：因同一帧的 onRender 已覆盖这些行而丢弃的 flush 次数。
+- `block-layout.rows`：每趟块布局 pass 处理的行数，含带 canvas 的清理行。
+- `block-layout.unchanged`：已包装且 canvas、占位和背景都匹配、直接返回而不写 DOM 的行数。
+- `block-layout.styleReads`：`getComputedStyle` 调用次数，即样式缓存未命中；主题变化会重新计一次。
+- `block-layout.canvasDraws`：实际重绘的块字形 canvas 行数。
+
+观察器批次数大于 flush 次数表示合并生效；`skips` 大于零表示 onRender 与观察器重复触发的工况已被丢弃。计数不区分选中/光标重绘，不能据此归因到具体输入事件；窗口重置前异常日志也会带当前计数。`renderer-diagnostics-ready` 同步报告 `schemaVersion=4`。
+
 `renderer-health.maxEventLoopGapMs` 包含心跳定时器本身的 1,000ms 间隔，
 约 1,002ms 不能解释成阻塞了 1 秒；需要结合长任务和 `event-loop-gap` 判断。
 `renderer:performance` 的 `terminal log coloring disabled after failure` 表示当前终端的

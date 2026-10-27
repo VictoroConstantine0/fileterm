@@ -18,6 +18,7 @@ function render(codesByRow, dimensions, frames = [], options = {}) {
   let onRender
   const pendingFrames = []
   const observers = []
+  const counterCounts = {}
   let passes = 0
 
   const doc = {
@@ -166,7 +167,10 @@ function render(codesByRow, dimensions, frames = [], options = {}) {
               (...args) => {
                 passes++
                 return work(...args)
-              }
+              },
+            countRendererWork: (counter, amount = 1) => {
+              counterCounts[counter] = (counterCounts[counter] ?? 0) + amount
+            }
           }
         if (id === './terminal-graphic-glyphs')
           return {
@@ -185,6 +189,7 @@ function render(codesByRow, dimensions, frames = [], options = {}) {
     onRender({ start: 0, end: ROWS - 1 })
   }
   reads.passes = () => passes
+  reads.counters = () => ({ ...counterCounts })
   reads.onRenderPass = () => onRender({ start: 0, end: ROWS - 1 })
   reads.triggerMutation = (indexes) => {
     const observer = observers[0]
@@ -265,6 +270,11 @@ test('selection repaints coalesce into a single block pass per frame', () => {
   reads.triggerMutation([0, 3])
   reads.flushFrames()
   assert.equal(reads.passes() - base, 1, 'three mutation batches schedule one pass')
+  const counters = reads.counters()
+  assert.equal(counters['block-observer.batches'], 3)
+  assert.equal(counters['block-observer.rows'], 4)
+  assert.equal(counters['block-observer.flushes'], 1)
+  assert.equal(counters['block-observer.skips'], undefined)
   reads.dispose()
 })
 
@@ -277,5 +287,9 @@ test('observer rows already covered by an onRender pass are not repeated', () =>
   reads.onRenderPass()
   reads.flushFrames()
   assert.equal(reads.passes() - base, 1, 'the onRender pass covers the queued row')
+  const counters = reads.counters()
+  assert.equal(counters['block-observer.batches'], 1)
+  assert.equal(counters['block-observer.skips'], 1)
+  assert.equal(counters['block-observer.flushes'], undefined)
   reads.dispose()
 })

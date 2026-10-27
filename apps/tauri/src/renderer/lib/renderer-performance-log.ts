@@ -17,7 +17,7 @@ export function installRendererPerformanceLogging(): () => void {
       DIAGNOSTIC_SCOPES.performance,
       JSON.stringify({
         event: 'renderer-diagnostics-ready',
-        schemaVersion: 3,
+        schemaVersion: 4,
         version: window.fileterm?.appVersion,
         platform: window.fileterm?.platform
       })

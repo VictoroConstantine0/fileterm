@@ -49,7 +49,17 @@ test('phase timing preserves this, return values, exceptions and async parsing w
   assert.equal(work.trackRendererWork('xterm-parse', () => pending)(), pending)
   advance(500)
   const snapshot = work.getRendererWorkSnapshot()
-  assert.equal(snapshot.schemaVersion, 3)
+  assert.equal(snapshot.schemaVersion, 4)
+  assert.deepEqual({ ...snapshot.counters }, {})
+  work.countRendererWork('block-observer.batches', 2)
+  work.countRendererWork('block-observer.rows')
+  assert.deepEqual(
+    { ...work.getRendererWorkSnapshot().counters },
+    {
+      'block-observer.batches': 2,
+      'block-observer.rows': 1
+    }
+  )
   assert.equal(snapshot.phases['xterm-parse'].totalElapsedMs, 20, 'async waiting is not synchronous parsing time')
   assert.equal(snapshot.phases['xterm-parse'].calls, 2)
   assert.equal(snapshot.phases['xterm-render'].maxElapsedMs, 30)
@@ -60,6 +70,7 @@ test('phase timing preserves this, return values, exceptions and async parsing w
   assert.equal(work.getRendererWorkSnapshot().recentSlowWork.length, 6)
   work.resetRendererWork()
   assert.equal(Object.keys(work.getRendererWorkSnapshot().phases).length, 0)
+  assert.deepEqual({ ...work.getRendererWorkSnapshot().counters }, {})
   assert.equal(work.getRendererWorkSnapshot().recentSlowWork.length, 0)
   assert.equal(work.getRendererWorkSnapshot().recentFailures.length, 0)
 })

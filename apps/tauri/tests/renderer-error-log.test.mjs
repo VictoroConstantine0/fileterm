@@ -59,7 +59,7 @@ function fixture(writer) {
     './diagnostic-log': diagnostic,
     './renderer-work-log': {
       getRendererWorkSnapshot: () => ({
-        schemaVersion: 3,
+        schemaVersion: 4,
         phases: {},
         recentSlowWork: [],
         recentFailures: [{ phase: 'terminal-ui-publish' }]

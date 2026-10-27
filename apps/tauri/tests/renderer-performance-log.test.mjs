@@ -152,7 +152,7 @@ function fixture({ supportsLongTasks = false, bridgeReady = true, longTaskObserv
 test('startup identifies the installed diagnostics schema without waiting for a stall', () => {
   const f = fixture()
   assert.equal(f.startup.event, 'renderer-diagnostics-ready')
-  assert.equal(f.startup.schemaVersion, 3)
+  assert.equal(f.startup.schemaVersion, 4)
   assert.equal(f.startup.platform, 'win32')
   f.dispose()
 })

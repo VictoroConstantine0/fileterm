@@ -22,7 +22,21 @@ export type RendererWorkPhase =
   | 'transfer-update-event'
 
 type WorkSummary = { calls: number; totalElapsedMs: number; maxElapsedMs: number }
+/**
+ * Counters describe how much work a phase skipped or repeated; unlike phases
+ * they carry no elapsed time and are only meaningful within one health window.
+ */
+export type RendererWorkCounter =
+  | 'block-observer.batches'
+  | 'block-observer.rows'
+  | 'block-observer.flushes'
+  | 'block-observer.skips'
+  | 'block-layout.rows'
+  | 'block-layout.unchanged'
+  | 'block-layout.styleReads'
+  | 'block-layout.canvasDraws'
 const phases = new Map<RendererWorkPhase, WorkSummary>()
+const counters = new Map<RendererWorkCounter, number>()
 const recentSlowWork: Array<{ phase: RendererWorkPhase; startedAtMs: number; elapsedMs: number }> = []
 const activeWork: Array<{ phase: RendererWorkPhase; startedAtMs: number }> = []
 const recentFailures: Array<{ phase: RendererWorkPhase; startedAtMs: number; elapsedMs: number }> = []
@@ -61,9 +75,14 @@ export function trackRendererWork<Args extends unknown[], Result>(
   }
 }
 
+/** Bounded integer counters for work that a phase chooses to skip or repeat. */
+export function countRendererWork(counter: RendererWorkCounter, amount = 1) {
+  counters.set(counter, (counters.get(counter) ?? 0) + amount)
+}
+
 export function getRendererWorkSnapshot() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     sampledAtMs: Math.round(performance.now()),
     timeOriginUnixMs: Number.isFinite(performance.timeOrigin) ? Math.round(performance.timeOrigin) : undefined,
     phases: Object.fromEntries(
@@ -76,6 +95,7 @@ export function getRendererWorkSnapshot() {
         }
       ])
     ),
+    counters: Object.fromEntries([...counters]),
     recentSlowWork: [...recentSlowWork],
     activeWork: activeWork.slice(-8).map((entry) => ({ ...entry })),
     recentFailures: recentFailures.map((entry) => ({ ...entry }))
@@ -84,6 +104,7 @@ export function getRendererWorkSnapshot() {
 
 export function resetRendererWork(preserveFailures = false) {
   phases.clear()
+  counters.clear()
   recentSlowWork.length = 0
   if (!preserveFailures) recentFailures.length = 0
 }
